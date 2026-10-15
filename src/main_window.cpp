@@ -36,14 +36,17 @@
 #include "doppler_delegate.h"
 #include "led_delegate.h"
 #include "preferences_dialog.h"
+#include "skyplot_widget.h"
+#include "ephemeris_widget.h"
 #include "ui_main_window.h"
 #include <QDebug>
 #include <QQmlContext>
 #include <QtCharts>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkDatagram>
-#include <iostream>
-#include <sstream>
+#include <QLabel>
+#include <QDateTime>
+#include <cmath>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow)
@@ -58,6 +61,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Monitor_Pvt_Wrapper.
     m_monitorPvtWrapper = new MonitorPvtWrapper();
+    m_GpsEphemerisWrapper = new GpsEphemerisWrapper();
 
     // Telecommand widget.
     m_telecommandDockWidget = new QDockWidget("Telecommand", this);
@@ -74,6 +78,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_mapWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
     m_mapDockWidget->setWidget(m_mapWidget);
     addDockWidget(Qt::TopDockWidgetArea, m_mapDockWidget);
+    m_mapDockWidget->setHidden(true);
 
     // Altitude widget.
     m_altitudeDockWidget = new QDockWidget("Altitude", this);
@@ -82,6 +87,7 @@ MainWindow::MainWindow(QWidget *parent)
     addDockWidget(Qt::TopDockWidgetArea, m_altitudeDockWidget);
     connect(m_monitorPvtWrapper, &MonitorPvtWrapper::altitudeChanged, m_altitudeWidget, &AltitudeWidget::addData);
     connect(&m_updateTimer, &QTimer::timeout, m_altitudeWidget, &AltitudeWidget::redraw);
+    m_altitudeDockWidget->setHidden(true);
 
     // Dilution of precision widget.
     m_DOPDockWidget = new QDockWidget("DOP", this);
@@ -90,6 +96,20 @@ MainWindow::MainWindow(QWidget *parent)
     addDockWidget(Qt::TopDockWidgetArea, m_DOPDockWidget);
     connect(m_monitorPvtWrapper, &MonitorPvtWrapper::dopChanged, m_DOPWidget, &DOPWidget::addData);
     connect(&m_updateTimer, &QTimer::timeout, m_DOPWidget, &DOPWidget::redraw);
+    m_DOPDockWidget->setHidden(true);
+
+    // SkyPlot widget.
+    m_skyplotDockWidget = new QDockWidget("Sky Plot", this);
+    m_skyplotWidget = new SkyPlotWidget(m_skyplotDockWidget);
+    m_skyplotDockWidget->setWidget(m_skyplotWidget);
+    addDockWidget(Qt::TopDockWidgetArea, m_skyplotDockWidget);
+
+    // Ephemeris widget.
+    m_ephemerisDockWidget = new QDockWidget("Ephemeris Data", this);
+    m_ephemerisWidget = new EphemerisWidget(m_ephemerisDockWidget);
+    m_ephemerisDockWidget->setWidget(m_ephemerisWidget);
+    addDockWidget(Qt::BottomDockWidgetArea, m_ephemerisDockWidget);
+    m_ephemerisDockWidget->setHidden(false);
 
     // QMenuBar.
     ui->actionQuit->setIcon(QIcon::fromTheme("application-exit"));
@@ -112,13 +132,22 @@ MainWindow::MainWindow(QWidget *parent)
     ui->mainToolBar->addAction(m_mapDockWidget->toggleViewAction());
     ui->mainToolBar->addAction(m_altitudeDockWidget->toggleViewAction());
     ui->mainToolBar->addAction(m_DOPDockWidget->toggleViewAction());
+    ui->mainToolBar->addAction(m_skyplotDockWidget->toggleViewAction());
+    ui->mainToolBar->addAction(m_ephemerisDockWidget->toggleViewAction());
+
     m_start->setEnabled(false);
     m_stop->setEnabled(true);
     m_clear->setEnabled(false);
+
     connect(m_start, &QAction::triggered, this, &MainWindow::toggleCapture);
     connect(m_stop, &QAction::triggered, this, &MainWindow::toggleCapture);
     connect(m_clear, &QAction::triggered, this, &MainWindow::clearEntries);
     connect(m_closePlotsAction, &QAction::triggered, this, &MainWindow::closePlots);
+
+    // Status Bar Setup
+    m_gpsTimeLabel = new QLabel(this);
+    m_gpsTimeLabel->setText("UTC Time: N/A");
+    statusBar()->addWidget(m_gpsTimeLabel);
 
     // Model.
     m_model = new ChannelTableModel();
@@ -133,16 +162,18 @@ MainWindow::MainWindow(QWidget *parent)
     ui->tableView->setItemDelegateForColumn(6, new Cn0Delegate());
     ui->tableView->setItemDelegateForColumn(7, new DopplerDelegate());
     ui->tableView->setItemDelegateForColumn(9, new LedDelegate());
-    // ui->tableView->setAlternatingRowColors(true);
-    // ui->tableView->setSelectionBehavior(QTableView::SelectRows);
+    ui->tableView->setAlternatingRowColors(true);
+    ui->tableView->setSelectionBehavior(QTableView::SelectRows);
 
     // Sockets.
     m_socketGnssSynchro = new QUdpSocket(this);
     m_socketMonitorPvt = new QUdpSocket(this);
+    m_socketGpsEphemeris = new QUdpSocket(this);
 
     // Connect Signals & Slots.
     connect(m_socketGnssSynchro, &QUdpSocket::readyRead, this, &MainWindow::receiveGnssSynchro);
     connect(m_socketMonitorPvt, &QUdpSocket::readyRead, this, &MainWindow::receiveMonitorPvt);
+    connect(m_socketGpsEphemeris, &QUdpSocket::readyRead, this, &MainWindow::receiveGpsEphemeris);
     connect(qApp, &QApplication::aboutToQuit, this, &MainWindow::quit);
     connect(ui->tableView, &QTableView::clicked, this, &MainWindow::expandPlot);
     connect(ui->actionAbout, &QAction::triggered, this, &MainWindow::about);
@@ -187,8 +218,8 @@ void MainWindow::updateChart(QtCharts::QChart *chart, QtCharts::QXYSeries *serie
 
     series->replace(points);
 
-    chart->axes(Qt::Horizontal).back()->setRange(min_x, max_x);
-    chart->axes(Qt::Vertical).back()->setRange(min_y, max_y);
+    chart->axes(Qt::Horizontal).constLast()->setRange(min_x, max_x);
+    chart->axes(Qt::Vertical).constLast()->setRange(min_y, max_y);
 }
 
 void MainWindow::toggleCapture()
@@ -217,6 +248,7 @@ void MainWindow::receiveGnssSynchro()
         if (m_stop->isEnabled())
         {
             m_model->populateChannels(&m_stocks);
+            m_skyplotWidget->updateSatellites(m_stocks);
             m_clear->setEnabled(true);
         }
     }
@@ -231,13 +263,53 @@ void MainWindow::receiveMonitorPvt()
     while (m_socketMonitorPvt->hasPendingDatagrams())
     {
         QNetworkDatagram datagram = m_socketMonitorPvt->receiveDatagram();
-        m_monitorPvt =
-            readMonitorPvt(datagram.data().data(), datagram.data().size());
+        m_monitorPvt = readMonitorPvt(datagram.data().data(), datagram.data().size());
 
         if (m_stop->isEnabled())
         {
             m_monitorPvtWrapper->addMonitorPvt(m_monitorPvt);
-            // clear->setEnabled(true);
+
+            double receiver_tow = m_monitorPvt.rx_time();
+            uint32_t receiver_week = m_monitorPvt.week();
+
+                    // A valid fix requires a week number > 0 and a valid Time-of-Week.
+            if (receiver_week > 0 && receiver_tow >= 0.0 && receiver_tow < 604800)
+            {
+                // Constants for GPS time conversion
+                const QDateTime gps_epoch(QDate(1980, 1, 6), QTime(0, 0, 0), Qt::UTC);
+                const int leap_seconds = 18; // Current GPS-UTC leap second offset
+                const int secs_in_week = 604800;
+
+                        // Calculate the total seconds from GPS epoch using the received week and TOW
+                qint64 gps_int_seconds = (static_cast<qint64>(receiver_week) * secs_in_week) + static_cast<qint64>(floor(receiver_tow));
+                double gps_frac_seconds = fmod(receiver_tow, 1.0);
+
+                        // Convert to QDateTime and apply the leap second correction to get UTC
+                QDateTime utc_time = gps_epoch.addSecs(gps_int_seconds).addSecs(-leap_seconds);
+
+                        // Format the string to your desired format
+                QString fractional_str = QString::number(gps_frac_seconds, 'f', 6).mid(1);
+                QString formatted_time = utc_time.toString("yyyy-MMM-dd hh:mm:ss") + fractional_str + " UTC";
+
+                m_gpsTimeLabel->setText(formatted_time);
+            }
+            else if (m_monitorPvt.IsInitialized())
+            {
+                // The receiver is sending data, but it doesn't contain a valid time fix yet.
+                m_gpsTimeLabel->setText("UTC Time: Awaiting PVT fix...");
+            }
+
+                    // Update sky plot with receiver position
+            double lat = m_monitorPvt.latitude();
+            double lon = m_monitorPvt.longitude();
+
+            bool validPosition = (lat >= -90.0 && lat <= 90.0 &&
+                                  lon >= -180.0 && lon <= 180.0 &&
+                                  (std::abs(lat) > 0.001 || std::abs(lon) > 0.001));
+
+            if (validPosition) {
+                m_skyplotWidget->updateReceiverPosition(m_monitorPvt);
+            }
         }
     }
 }
@@ -249,6 +321,9 @@ void MainWindow::clearEntries()
 
     m_altitudeWidget->clear();
     m_DOPWidget->clear();
+    m_skyplotWidget->clear();
+    m_ephemerisWidget->clear();
+    m_gpsTimeLabel->setText("UTC Time: N/A");
 
     m_clear->setEnabled(false);
 }
@@ -283,6 +358,36 @@ gnss_sdr::MonitorPvt MainWindow::readMonitorPvt(char buff[], int bytes)
     }
 
     return m_monitorPvt;
+}
+
+gnss_sdr::GpsEphemeris MainWindow::readGpsEphemeris(char buff[], int bytes)
+{
+    try
+    {
+        std::string data(buff, bytes);
+        m_gpsEphemeris.ParseFromString(data);
+    }
+    catch (std::exception &e)
+    {
+        qDebug() << e.what();
+    }
+
+    return m_gpsEphemeris;
+}
+
+void MainWindow::receiveGpsEphemeris()
+{
+    while (m_socketGpsEphemeris->hasPendingDatagrams())
+    {
+        QNetworkDatagram datagram = m_socketGpsEphemeris->receiveDatagram();
+        m_gpsEphemeris = readGpsEphemeris(datagram.data().data(), datagram.data().size());
+
+        if (m_stop->isEnabled())
+        {
+            m_GpsEphemerisWrapper->addGpsEphemeris(m_gpsEphemeris);
+            m_ephemerisWidget->updateEphemeris(m_gpsEphemeris);
+        }
+    }
 }
 
 void MainWindow::saveSettings()
@@ -343,11 +448,13 @@ void MainWindow::setPort()
     settings.beginGroup("Preferences_Dialog");
     m_portGnssSynchro = settings.value("port_gnss_synchro", 1111).toInt();
     m_portMonitorPvt = settings.value("port_monitor_pvt", 1112).toInt();
+    m_portGpsEphemeris = settings.value("port_gps_ephemeris", 1113).toInt();
     settings.endGroup();
 
     m_socketGnssSynchro->disconnectFromHost();
     m_socketGnssSynchro->bind(QHostAddress::Any, m_portGnssSynchro);
     m_socketMonitorPvt->bind(QHostAddress::Any, m_portMonitorPvt);
+    m_socketGpsEphemeris->bind(QHostAddress::Any, m_portGpsEphemeris);
 }
 
 void MainWindow::expandPlot(const QModelIndex &index)
