@@ -302,6 +302,26 @@ void MainWindow::saveSettings()
     m_settings.endArray();
     m_settings.endGroup();
 
+    m_settings.beginGroup("Map");
+    m_settings.setValue("size", m_mapDockWidget->size());
+    m_settings.setValue("hidden", m_mapDockWidget->isHidden());
+    m_settings.endGroup();
+
+    m_settings.beginGroup("Altitude");
+    m_settings.setValue("size", m_altitudeDockWidget->size());
+    m_settings.setValue("hidden", m_altitudeDockWidget->isHidden());
+    m_settings.endGroup();
+
+    m_settings.beginGroup("DOP");
+    m_settings.setValue("size", m_DOPDockWidget->size());
+    m_settings.setValue("hidden", m_DOPDockWidget->isHidden());
+    m_settings.endGroup();
+
+    m_settings.beginGroup("Telecommand");
+    m_settings.setValue("size", m_telecommandDockWidget->size());
+    m_settings.setValue("hidden", m_telecommandDockWidget->isHidden());
+    m_settings.endGroup();
+
     qDebug() << "Settings Saved";
 }
 
@@ -320,6 +340,26 @@ void MainWindow::loadSettings()
         ui->tableView->setColumnWidth(i, m_settings.value("width", 100).toInt());
     }
     m_settings.endArray();
+    m_settings.endGroup();
+
+    m_settings.beginGroup("Map");
+    m_mapDockWidget->setHidden(m_settings.value("hidden", true).toBool());
+    m_mapDockWidget->resize(m_settings.value("size", QSize(30, 100)).toSize());
+    m_settings.endGroup();
+
+    m_settings.beginGroup("Altitude");
+    m_altitudeDockWidget->setHidden(m_settings.value("hidden", true).toBool());
+    m_altitudeDockWidget->resize(m_settings.value("size", QSize(30, 100)).toSize());
+    m_settings.endGroup();
+
+    m_settings.beginGroup("DOP");
+    m_DOPDockWidget->setHidden(m_settings.value("hidden", true).toBool());
+    m_DOPDockWidget->resize(m_settings.value("size", QSize(30, 100)).toSize());
+    m_settings.endGroup();
+
+    m_settings.beginGroup("Telecommand");
+    m_telecommandDockWidget->setHidden(m_settings.value("hidden", false).toBool());
+    m_telecommandDockWidget->resize(m_settings.value("size", QSize(30, 100)).toSize());
     m_settings.endGroup();
 
     setPort();
