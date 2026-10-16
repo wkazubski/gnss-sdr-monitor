@@ -89,26 +89,19 @@ void Cn0Delegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
 {
     bool outOfScale = false;
 
-    QVector<QPointF> points;
+    const QVector<QPointF> &points = index.data(Qt::DisplayRole).value<QVector<QPointF>>();
     QVector<double> x_data, y_data;
-    QList<QVariant> var = index.data(Qt::DisplayRole).toList();
-    for (int i = 0; i < var.size(); i++)
-    {
-        points << var.at(i).toPointF();
-        x_data << var.at(i).toPointF().x();
-        y_data << var.at(i).toPointF().y();
-    }
 
-    double min_x = std::numeric_limits<double>::max();
-    double max_x = -std::numeric_limits<double>::max();
+    double min_x = std::numeric_limits<int>::max();
+    double max_x = -std::numeric_limits<int>::max();
 
     double min_y = m_minCn0;
     double max_y = m_maxCn0;
 
     if (m_autoRangeEnabled)
     {
-        min_y = std::numeric_limits<double>::max();
-        max_y = -std::numeric_limits<double>::max();
+        min_y = std::numeric_limits<int>::max();
+        max_y = -std::numeric_limits<int>::max();
     }
 
     int em_w = option.fontMetrics.height();
@@ -142,6 +135,7 @@ void Cn0Delegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
 
     QPointF val;
     QVector<QPointF> fpoints;
+    fpoints.append(QPointF(0,0));
     QStyledItemDelegate::paint(painter, option, index);
 
     if (points.isEmpty() || m_bufferSize < 1.0 || contentHeight <= 0)
@@ -149,45 +143,51 @@ void Cn0Delegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
         return;
     }
 
-    // Remove first points until the number of elements is within the designated buffer size.
-    while (points.length() > m_bufferSize)
-    {
-        points.removeFirst();
-    }
+    // Get pointers to a range of elements is within the designated buffer size.
+    size_t idx = 0;
+    if (points.length() > m_bufferSize)
+        idx = points.length() - m_bufferSize;
+    const QPointF *points_begin = &points[idx];
+    const QPointF *points_end = &points[points.length()];
 
-    foreach (val, points)
+    for (const QPointF *val = points_begin; val != points_end; val ++)
     {
         // Find the min and max values of the time data (horizontal axis).
-        if (val.x() < min_x)
+        if (val->x() < min_x)
         {
-            min_x = val.x();
+            min_x = val->x();
         }
 
-        if (val.x() > max_x)
+        if (val->x() > max_x)
         {
-            max_x = val.x();
+            max_x = val->x();
         }
 
         // Find the min and max values of the CN0 data (vertical axis) if auto range is enabled.
         if (m_autoRangeEnabled)
         {
-            if (val.y() < min_y)
+            if (val->y() < min_y)
             {
-                min_y = val.y();
+                min_y = val->y();
             }
 
-            if (val.y() > max_y)
+            if (val->y() > max_y)
             {
-                max_y = val.y();
+                max_y = val->y();
             }
         }
     }
 
+    if(max_x == min_x)
+        max_x = min_x+1;
+    if(max_y == min_y)
+        max_y = min_y+1;
+
     // Map the real CN0 data to the sparkline coordinate system.
-    foreach (val, points)
+    for (const QPointF *val = points_begin; val != points_end; val ++)
     {
-        double x_in = val.x();
-        double y_in = val.y();
+        double x_in = val->x();
+        double y_in = val->y();
 
         double x_out = 0;
         double y_out = 0;
@@ -264,9 +264,9 @@ void Cn0Delegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
         painter->translate(hGap, vGap);
 
         // Fill area below the CN0 sparkline with a gradient.
-        QPointF startPoint(fpoints.first().x(), contentHeight);
+        QPointF startPoint(fpoints[1].x(), contentHeight);
         QPointF endPoint(fpoints.last().x(), contentHeight);
-        fpoints.push_front(startPoint);
+        fpoints[0] = startPoint;
         fpoints.push_back(endPoint);
 
         QLinearGradient gradient(QPointF(0, 0), QPointF(0, contentHeight));
@@ -275,20 +275,18 @@ void Cn0Delegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
 
         painter->setBrush(QBrush(gradient));
         painter->setPen(Qt::NoPen);
-        painter->drawPolygon(QPolygonF(fpoints));
+        painter->drawPolygon(&fpoints[0], fpoints.length());
 
         // Draw CN0 sparkline.
-        fpoints.removeFirst();
-        fpoints.removeLast();
         painter->setPen(Qt::black);
-        painter->drawPolyline(QPolygonF(fpoints));
+        painter->drawPolyline(&fpoints[1], fpoints.length() - 2);
 
         // Translate painting origin back to cellOrigin.
         painter->translate(-hGap, -vGap);
     }
 
     // Get the value of the last CN0 smple.
-    double lastCN0 = var.last().toPointF().y();
+    double lastCN0 = points.last().y();
 
     // If the value of the last CN0 sample is outside of the designated scale use red color otherwise use black.
     if (lastCN0 < m_minCn0 || lastCN0 > m_maxCn0)

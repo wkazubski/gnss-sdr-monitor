@@ -53,6 +53,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_updateTimer.setInterval(500);
     m_updateTimer.setSingleShot(true);
     connect(&m_updateTimer, &QTimer::timeout, [this] { m_model->update(); });
+    connect(&m_updateTimer, &QTimer::timeout, this, &MainWindow::updateTitle);
 
     ui->setupUi(this);
 
@@ -83,6 +84,14 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_monitorPvtWrapper, &MonitorPvtWrapper::altitudeChanged, m_altitudeWidget, &AltitudeWidget::addData);
     connect(&m_updateTimer, &QTimer::timeout, m_altitudeWidget, &AltitudeWidget::redraw);
 
+    // PPM widget.
+    m_ppmDockWidget = new QDockWidget("PPM", this);
+    m_ppmWidget = new PpmWidget(m_ppmDockWidget);
+    m_ppmDockWidget->setWidget(m_ppmWidget);
+    addDockWidget(Qt::TopDockWidgetArea, m_ppmDockWidget);
+    connect(m_monitorPvtWrapper, &MonitorPvtWrapper::ppmChanged, m_ppmWidget, &PpmWidget::addData);
+    connect(&m_updateTimer, &QTimer::timeout, m_ppmWidget, &PpmWidget::redraw);
+
     // Dilution of precision widget.
     m_DOPDockWidget = new QDockWidget("DOP", this);
     m_DOPWidget = new DOPWidget(m_DOPDockWidget);
@@ -90,6 +99,13 @@ MainWindow::MainWindow(QWidget *parent)
     addDockWidget(Qt::TopDockWidgetArea, m_DOPDockWidget);
     connect(m_monitorPvtWrapper, &MonitorPvtWrapper::dopChanged, m_DOPWidget, &DOPWidget::addData);
     connect(&m_updateTimer, &QTimer::timeout, m_DOPWidget, &DOPWidget::redraw);
+
+    // Skyview widget.
+    m_SkyViewDockWidget = new QDockWidget("SkyView", this);
+    m_SkyViewWidget = new SkyViewWidget(m_SkyViewDockWidget);
+    m_SkyViewDockWidget->setWidget(m_SkyViewWidget);
+    addDockWidget(Qt::TopDockWidgetArea, m_SkyViewDockWidget);
+    connect(&m_updateTimer, &QTimer::timeout, m_SkyViewWidget, &SkyViewWidget::redraw);
 
     // QMenuBar.
     ui->actionQuit->setIcon(QIcon::fromTheme("application-exit"));
@@ -111,7 +127,9 @@ MainWindow::MainWindow(QWidget *parent)
     ui->mainToolBar->addAction(m_telecommandDockWidget->toggleViewAction());
     ui->mainToolBar->addAction(m_mapDockWidget->toggleViewAction());
     ui->mainToolBar->addAction(m_altitudeDockWidget->toggleViewAction());
+    ui->mainToolBar->addAction(m_ppmDockWidget->toggleViewAction());
     ui->mainToolBar->addAction(m_DOPDockWidget->toggleViewAction());
+    ui->mainToolBar->addAction(m_SkyViewDockWidget->toggleViewAction());
     m_start->setEnabled(false);
     m_stop->setEnabled(true);
     m_clear->setEnabled(false);
@@ -163,20 +181,17 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::updateChart(QtCharts::QChart *chart, QtCharts::QXYSeries *series, const QModelIndex &index)
 {
-    QPointF p;
-    QVector<QPointF> points;
+    const QVector<QPointF> &points = index.data(Qt::DisplayRole).value<QVector<QPointF>>();
 
-    double min_x = std::numeric_limits<double>::max();
-    double max_x = -std::numeric_limits<double>::max();
+    double min_x = std::numeric_limits<int>::max();
+    double max_x = -std::numeric_limits<int>::max();
 
-    double min_y = std::numeric_limits<double>::max();
-    double max_y = -std::numeric_limits<double>::max();
+    double min_y = std::numeric_limits<int>::max();
+    double max_y = -std::numeric_limits<int>::max();
 
-    QList<QVariant> var = index.data(Qt::DisplayRole).toList();
-    for (int i = 0; i < var.size(); i++)
+    for (int i = 0; i < points.size(); i++)
     {
-        p = var.at(i).toPointF();
-        points << p;
+        const QPointF &p = points.at(i);
 
         min_x = std::min(min_x, p.x());
         min_y = std::min(min_y, p.y());
@@ -184,6 +199,10 @@ void MainWindow::updateChart(QtCharts::QChart *chart, QtCharts::QXYSeries *serie
         max_x = std::max(max_x, p.x());
         max_y = std::max(max_y, p.y());
     }
+    if(max_x == min_x)
+        max_x = min_x+1;
+    if(max_y == min_y)
+        max_y = min_y+1;
 
     series->replace(points);
 
@@ -237,6 +256,14 @@ void MainWindow::receiveMonitorPvt()
         if (m_stop->isEnabled())
         {
             m_monitorPvtWrapper->addMonitorPvt(m_monitorPvt);
+            m_SkyViewWidget->clear();
+            m_model->clearUsed();
+            for(int k=0;k<m_monitorPvt.used_satellites_size();k++)
+            {
+                auto & s = m_monitorPvt.used_satellites(k);
+                m_model->setUsed(s.prn(), s.signal(), true);
+                m_SkyViewWidget->addData(s.prn(),s.azimuth_deg(),s.elevation_deg(),s.system(),s.signal(),s.combined(),m_model->cn0(s.prn(),s.signal()),0);
+            }
             // clear->setEnabled(true);
         }
     }
@@ -248,7 +275,9 @@ void MainWindow::clearEntries()
     m_model->update();
 
     m_altitudeWidget->clear();
+    m_ppmWidget->clear();
     m_DOPWidget->clear();
+    m_SkyViewWidget->clear();
 
     m_clear->setEnabled(false);
 }
@@ -264,7 +293,7 @@ gnss_sdr::Observables MainWindow::readGnssSynchro(char buff[], int bytes)
     }
     catch (std::exception &e)
     {
-        qDebug() << e.what();
+        qDebug() << "MainWindow::readGnssSynchro " << e.what();
     }
 
     return m_stocks;
@@ -279,7 +308,7 @@ gnss_sdr::MonitorPvt MainWindow::readMonitorPvt(char buff[], int bytes)
     }
     catch (std::exception &e)
     {
-        qDebug() << e.what();
+        qDebug() << "MainWindow::readMonitorPvt" << e.what();
     }
 
     return m_monitorPvt;
@@ -321,8 +350,15 @@ void MainWindow::loadSettings()
     }
     m_settings.endArray();
     m_settings.endGroup();
+    m_settings.beginGroup("Preferences_Dialog");
+    m_monitorPvtWrapper->setBufferSize(m_settings.value("pvt_buffer_size",1000).toInt());
+    m_ppmWidget->setBufferSize(m_settings.value("ppm_buffer_size",1000).toInt());
+    m_ppmWidget->setDecim(m_settings.value("ppm_decim",1).toInt());
+    m_ppmWidget->setFilter(m_settings.value("ppm_filter",1.).toDouble());
+    m_settings.endGroup();
 
-    setPort();
+    setPreferences();
+    m_model->setBufferSize();
 
     qDebug() << "Settings Loaded";
 }
@@ -333,16 +369,20 @@ void MainWindow::showPreferences()
     connect(preferences, &PreferencesDialog::accepted, m_model,
         &ChannelTableModel::setBufferSize);
     connect(preferences, &PreferencesDialog::accepted, this,
-        &MainWindow::setPort);
+        &MainWindow::setPreferences);
     preferences->exec();
 }
 
-void MainWindow::setPort()
+void MainWindow::setPreferences()
 {
     QSettings settings;
     settings.beginGroup("Preferences_Dialog");
     m_portGnssSynchro = settings.value("port_gnss_synchro", 1111).toInt();
     m_portMonitorPvt = settings.value("port_monitor_pvt", 1112).toInt();
+    m_monitorPvtWrapper->setBufferSize(settings.value("pvt_buffer_size",1000).toInt());
+    m_ppmWidget->setBufferSize(settings.value("ppm_buffer_size",1000).toInt());
+    m_ppmWidget->setDecim(settings.value("ppm_decim",1).toInt());
+    m_ppmWidget->setFilter(settings.value("ppm_filter",1.).toDouble());
     settings.endGroup();
 
     m_socketGnssSynchro->disconnectFromHost();
@@ -538,6 +578,28 @@ void MainWindow::deletePlots()
         chartView->deleteLater();
     }
     m_plotsDoppler.clear();
+}
+
+void cmpUpdateFlag(quint16& a, const quint16 b, bool& f)
+{
+    if(a!=b)
+    {
+        a=b;
+        f=true;
+    }
+}
+
+void MainWindow::updateTitle()
+{
+    const auto satUsed=m_monitorPvt.used_satellites_size();
+    const auto satTracking=m_model->getActive();
+    const auto satGood=m_model->getGood();
+    bool doUpdate{false};
+    cmpUpdateFlag(m_satUsed, satUsed, doUpdate);
+    cmpUpdateFlag(m_satTracking, satTracking, doUpdate);
+    cmpUpdateFlag(m_satGood, satGood, doUpdate);
+    if(doUpdate)
+        setWindowTitle(QString("GNSS-SDR Monitor %1/%2T %3U").arg(m_satTracking).arg(m_satGood).arg(m_satUsed));
 }
 
 void MainWindow::about()

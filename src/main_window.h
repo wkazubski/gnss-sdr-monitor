@@ -39,6 +39,8 @@
 #include "gnss_synchro.pb.h"
 #include "monitor_pvt.pb.h"
 #include "monitor_pvt_wrapper.h"
+#include "ppm_widget.h"
+#include "skyview_widget.h"
 #include "telecommand_widget.h"
 #include <QAbstractTableModel>
 #include <QChart>
@@ -80,10 +82,11 @@ public slots:
     void clearEntries();
     void quit();
     void showPreferences();
-    void setPort();
+    void setPreferences();
     void expandPlot(const QModelIndex &index);
     void closePlots();
     void deletePlots();
+    void updateTitle();
     void about();
 
 protected:
@@ -97,12 +100,16 @@ private:
     QDockWidget *m_mapDockWidget;
     QDockWidget *m_telecommandDockWidget;
     QDockWidget *m_altitudeDockWidget;
+    QDockWidget *m_ppmDockWidget;
     QDockWidget *m_DOPDockWidget;
+    QDockWidget *m_SkyViewDockWidget;
 
     QQuickWidget *m_mapWidget;
     TelecommandWidget *m_telecommandWidget;
     AltitudeWidget *m_altitudeWidget;
+    PpmWidget *m_ppmWidget;
     DOPWidget *m_DOPWidget;
+    SkyViewWidget *m_SkyViewWidget;
 
     ChannelTableModel *m_model;
     QUdpSocket *m_socketGnssSynchro;
@@ -113,6 +120,10 @@ private:
     std::vector<int> m_channels;
     quint16 m_portGnssSynchro;
     quint16 m_portMonitorPvt;
+    quint16 m_satUsed{0};
+    quint16 m_satTracking{0};
+    quint16 m_satGood{0};
+
     QSettings m_settings;
     QTimer m_updateTimer;
 

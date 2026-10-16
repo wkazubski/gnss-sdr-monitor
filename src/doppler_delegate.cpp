@@ -57,21 +57,14 @@ void DopplerDelegate::setBufferSize(int size)
 void DopplerDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
     const QModelIndex &index) const
 {
-    QList<QPointF> points;
+    const QVector<QPointF> &points = index.data(Qt::DisplayRole).value<QVector<QPointF>>();
     QVector<double> x_data, y_data;
-    QList<QVariant> var = index.data(Qt::DisplayRole).toList();
-    for (int i = 0; i < var.size(); i++)
-    {
-        points << var.at(i).toPointF();
-        x_data << var.at(i).toPointF().x();
-        y_data << var.at(i).toPointF().y();
-    }
 
-    double min_x = std::numeric_limits<double>::max();
-    double max_x = -std::numeric_limits<double>::max();
+    double min_x = std::numeric_limits<int>::max();
+    double max_x = -std::numeric_limits<int>::max();
 
-    double min_y = std::numeric_limits<double>::max();
-    double max_y = -std::numeric_limits<double>::max();
+    double min_y = std::numeric_limits<int>::max();
+    double max_y = -std::numeric_limits<int>::max();
 
     int em_w = option.fontMetrics.height();
 
@@ -104,45 +97,52 @@ void DopplerDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
 
     QPointF val;
     QVector<QPointF> fpoints;
+    fpoints.append(QPointF(0,0));
     QStyledItemDelegate::paint(painter, option, index);
 
     if (points.isEmpty() || m_bufferSize < 1.0 || contentHeight <= 0)
     {
         return;
     }
+    // Get pointers to a range of elements is within the designated buffer size.
+    size_t idx = 0;
+    if (points.length() > m_bufferSize)
+        idx = points.length() - m_bufferSize;
+    const QPointF *points_begin = &points[idx];
+    const QPointF *points_end = &points[points.length()];
 
-    while (points.length() > m_bufferSize)
+    for (const QPointF *val = points_begin; val != points_end; val ++)
     {
-        points.removeFirst();
+        if (val->x() < min_x)
+        {
+            min_x = val->x();
+        }
+
+        if (val->x() > max_x)
+        {
+            max_x = val->x();
+        }
+
+        if (val->y() < min_y)
+        {
+            min_y = val->y();
+        }
+
+        if (val->y() > max_y)
+        {
+            max_y = val->y();
+        }
     }
 
-    foreach (val, points)
+    if(max_x == min_x)
+        max_x = min_x+1;
+    if(max_y == min_y)
+        max_y = min_y+1;
+
+    for (const QPointF *val = points_begin; val != points_end; val ++)
     {
-        if (val.x() < min_x)
-        {
-            min_x = val.x();
-        }
-
-        if (val.x() > max_x)
-        {
-            max_x = val.x();
-        }
-
-        if (val.y() < min_y)
-        {
-            min_y = val.y();
-        }
-
-        if (val.y() > max_y)
-        {
-            max_y = val.y();
-        }
-    }
-
-    foreach (val, points)
-    {
-        double x = sparklineWidth * (val.x() - min_x) / (max_x - min_x);
-        double y = contentHeight - (contentHeight * (val.y() - min_y) / (max_y - min_y));
+        double x = sparklineWidth * (val->x() - min_x) / (max_x - min_x);
+        double y = contentHeight - (contentHeight * (val->y() - min_y) / (max_y - min_y));
         fpoints.append(QPointF(x, y));
     }
 
@@ -184,9 +184,9 @@ void DopplerDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     painter->translate(offset.x() + hGap, offset.y() + vGap);
 
     // Fill area below the Doppler sparkline.
-    QPointF startPoint(fpoints.first().x(), contentHeight);
+    QPointF startPoint(fpoints[1].x(), contentHeight);
     QPointF endPoint(fpoints.last().x(), contentHeight);
-    fpoints.push_front(startPoint);
+    fpoints[0]=startPoint;
     fpoints.push_back(endPoint);
 
     QLinearGradient gradient(QPointF(0, 0), QPointF(0, contentHeight));
@@ -195,19 +195,17 @@ void DopplerDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
 
     painter->setBrush(QBrush(gradient));
     painter->setPen(Qt::NoPen);
-    painter->drawPolygon(QPolygonF(fpoints));
+    painter->drawPolygon(&fpoints[0], fpoints.length());
 
     // Draw Doppler sparkline.
-    fpoints.removeFirst();
-    fpoints.removeLast();
     painter->setPen(Qt::black);
-    painter->drawPolyline(QPolygonF(fpoints));
+    painter->drawPolyline(&fpoints[1], fpoints.length() - 2);
 
     // Translate painting origin to cellOrigin.
     painter->translate(-hGap, -vGap);
 
     // Display value of the last Doppler sample next to the sparkline.
-    painter->drawText(textRect, QString::number(var.last().toPointF().y(), 'f', 1));
+    painter->drawText(textRect, QString::number(points.last().y(), 'f', 1));
 
     // Draw visual guides for debugging.
     //drawGuides(painter, cellRect, sparklineRect, textRect);

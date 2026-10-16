@@ -62,7 +62,9 @@ public:
 signals:
     void dataChanged();
     void altitudeChanged(qreal newTow, qreal newAltitude);
+    void ppmChanged(qreal newTow, qreal newPPM);
     void dopChanged(qreal newTow, qreal newGdop, qreal newPdop, qreal newHdop, qreal newVdop);
+    void ecefChanged(qreal newX, qreal newY, qreal newZ);
 
 public slots:
     void clearData();

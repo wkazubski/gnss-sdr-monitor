@@ -46,13 +46,23 @@ ChannelTableModel::ChannelTableModel()
 {
     m_mapSignalPrettyName["1C"] = "L1 C/A";
     m_mapSignalPrettyName["1B"] = "E1";
-    m_mapSignalPrettyName["1G"] = "L1 C/A";
+    m_mapSignalPrettyName["1G"] = "L1OF";
     m_mapSignalPrettyName["2S"] = "L2C";
-    m_mapSignalPrettyName["2G"] = "L2 C/A";
+    m_mapSignalPrettyName["2G"] = "L2OF";
     m_mapSignalPrettyName["5X"] = "E5a";
+    m_mapSignalPrettyName["7X"] = "E5b";
+    m_mapSignalPrettyName["E6"] = "E6";
     m_mapSignalPrettyName["L5"] = "L5";
+    m_mapSignalPrettyName["B1"] = "B1I";
+    m_mapSignalPrettyName["B2"] = "B2I";
+    m_mapSignalPrettyName["B3"] = "B3I";
+    m_mapSignalPrettyName["1D"] = "B1C";
+    m_mapSignalPrettyName["S1"] = "L1";
+    m_mapSignalPrettyName["J1"] = "L1 C/A";
+    m_mapSignalPrettyName["J5"] = "L5";
+    m_mapSignalPrettyName["I5"] = "I5";
 
-    m_columns = 11;
+    m_columns = 12;
     m_bufferSize = DEFAULT_BUFFER_SIZE;
 }
 
@@ -83,40 +93,28 @@ QVariant ChannelTableModel::data(const QModelIndex &index, int role) const
         {
             int channel_id = m_channelsId.at(index.row());
 
-            gnss_sdr::GnssSynchro channel = m_channels.at(channel_id);
+            const gnss_sdr::GnssSynchro & channel = m_channels.at(channel_id);
 
-            QString channel_signal = m_channelsSignal.at(channel_id);
+            const QString & channel_signal = m_channelsSignal.at(channel_id);
 
-            boost::circular_buffer<double> channel_time_cbuf =
+            const boost::circular_buffer<double> & channel_time_cbuf =
                 m_channelsTime.at(channel_id);
-            boost::circular_buffer<double> channel_prompt_i_cbuf =
+            const boost::circular_buffer<double> & channel_prompt_i_cbuf =
                 m_channelsPromptI.at(channel_id);
-            boost::circular_buffer<double> channel_prompt_q_cbuf =
+            const boost::circular_buffer<double> & channel_prompt_q_cbuf =
                 m_channelsPromptQ.at(channel_id);
-            boost::circular_buffer<double> channel_cn0_cbuf =
+            const boost::circular_buffer<double> & channel_cn0_cbuf =
                 m_channelsCn0.at(channel_id);
-            boost::circular_buffer<double> channel_doppler_cbuf =
+            const boost::circular_buffer<double> & channel_doppler_cbuf =
                 m_channelsDoppler.at(channel_id);
 
-            QList<QVariant> channel_prompt_iq;
-            QList<QVariant> channel_cn0;
-            QList<QVariant> channel_doppler;
-
-            for (int i = 0; i < channel_cn0_cbuf.size(); i++)
-            {
-                channel_prompt_iq << QPointF(channel_prompt_i_cbuf.at(i),
-                    channel_prompt_q_cbuf.at(i));
-                channel_cn0 << QPointF(channel_time_cbuf.at(i), channel_cn0_cbuf.at(i));
-                channel_doppler << QPointF(channel_time_cbuf.at(i),
-                    channel_doppler_cbuf.at(i));
-            }
 
             if (role == Qt::DisplayRole)
             {
                 switch (index.column())
                 {
                 case 0:
-                    return channel.channel_id();
+                    return QString::number(channel.channel_id()) + (m_used.find(channel_id) != m_used.end() ? "+" : "");
 
                 case 1:
                     return channel_signal;
@@ -131,22 +129,41 @@ QVariant ChannelTableModel::data(const QModelIndex &index, int role) const
                     return channel.acq_delay_samples();
 
                 case 5:
-                    return channel_prompt_iq;
+                    {
+                        QVector<QPointF> channel_prompt_iq(channel_cn0_cbuf.size());
+                        for (int i = 0; i < channel_cn0_cbuf.size(); i++)
+                            channel_prompt_iq.replace(i, QPointF(channel_prompt_i_cbuf.at(i),
+                                channel_prompt_q_cbuf.at(i)));
+                        return QVariant::fromValue(channel_prompt_iq);
+                    }
 
                 case 6:
-                    return channel_cn0;
+                    {
+                        QVector<QPointF> channel_cn0(channel_cn0_cbuf.size());
+                        for (int i = 0; i < channel_cn0_cbuf.size(); i++)
+                            channel_cn0.replace(i, QPointF(channel_time_cbuf.at(i), channel_cn0_cbuf.at(i)));
+                        return QVariant::fromValue(channel_cn0);
+                    }
 
                 case 7:
-                    return channel_doppler;
+                    {
+                        QVector<QPointF> channel_doppler(channel_cn0_cbuf.size());
+                        for (int i = 0; i < channel_cn0_cbuf.size(); i++)
+                            channel_doppler.replace(i, QPointF(channel_time_cbuf.at(i),
+                                channel_doppler_cbuf.at(i)));
+                        return QVariant::fromValue(channel_doppler);
+                    }
 
                 case 8:
                     return channel.tow_at_current_symbol_ms();
 
                 case 9:
-                    return channel.flag_valid_word();
+                    return int(channel.flag_valid_symbol_output())|(int(channel.flag_valid_word())<<1);
 
                 case 10:
                     return channel.pseudorange_m();
+                case 11:
+                    return qulonglong(channel.acq_samplestamp_samples());
                 }
             }
             else if (role == Qt::ToolTipRole)
@@ -185,6 +202,8 @@ QVariant ChannelTableModel::data(const QModelIndex &index, int role) const
 
                 case 10:
                     return QVariant::Invalid;
+                case 11:
+                    return QVariant::Invalid;
                 }
             }
             else if (index.column() == 1 && role == Qt::DecorationRole)
@@ -204,6 +223,14 @@ QVariant ChannelTableModel::data(const QModelIndex &index, int role) const
                 else if (channel.system() == "C")
                 {
                     return QIcon(":/images/flag-cn.png");
+                }
+                else if (channel.system() == "J")
+                {
+                    return QIcon(":/images/flag-jp.png");
+                }
+                else if (channel.system() == "I")
+                {
+                    return QIcon(":/images/flag-in.png");
                 }
             }
         }
@@ -262,6 +289,9 @@ QVariant ChannelTableModel::headerData(int section,
 
             case 10:
                 return "Pseudorange [m]";
+
+            case 11:
+                return "ACQ Stamp [samples]";
             }
         }
     }
@@ -274,10 +304,20 @@ QVariant ChannelTableModel::headerData(int section,
  */
 void ChannelTableModel::populateChannels(const gnss_sdr::Observables *stocks)
 {
+    std::set<int> new_active{};
+    std::set<int> new_good{};
     for (std::size_t i = 0; i < stocks->observable_size(); i++)
     {
         populateChannel(&stocks->observable(i));
+        if(stocks->observable(i).fs()!=0)
+        {
+            new_active.emplace(i);
+            if(stocks->observable(i).flag_valid_word())
+                new_good.emplace(i);
+        }
     }
+    m_active = new_active;
+    m_good = new_good;
 }
 
 /*!
@@ -370,7 +410,31 @@ void ChannelTableModel::populateChannel(const gnss_sdr::GnssSynchro *ch)
             // Map size has changed so record the new channel number in the vector of channel IDs.
             m_channelsId.push_back(ch->channel_id());
         }
+        m_sigChannel[toKey(ch->signal(),ch->prn())]=ch->channel_id();
     }
+}
+double ChannelTableModel::cn0(int prn, const std::string & signal)
+{
+    auto it = m_sigChannel.find(toKey(signal,prn));
+    if(it == m_sigChannel.end())
+        return 0;
+    return m_channelsCn0[it->second].at(m_channelsCn0[it->second].size() - 1);
+}
+
+void ChannelTableModel::clearUsed()
+{
+    m_used.clear();
+}
+
+void ChannelTableModel::setUsed(int prn, const std::string & signal, bool used)
+{
+    auto it = m_sigChannel.find(toKey(signal,prn));
+    if(it == m_sigChannel.end())
+        return;
+    if(used)
+        m_used.emplace(it->second);
+    else
+        m_used.erase(it->second);
 }
 
 /*!
@@ -402,6 +466,11 @@ void ChannelTableModel::clearChannels()
     m_channelsPromptQ.clear();
     m_channelsCn0.clear();
     m_channelsDoppler.clear();
+    m_sigChannel.clear();
+    m_active.clear();
+    m_used.clear();
+    m_good.clear();
+    m_sigChannel.clear();
 }
 
 /*!
@@ -420,6 +489,26 @@ QString ChannelTableModel::getSignalPrettyName(const gnss_sdr::GnssSynchro *ch)
         else if (ch->system() == "E")
         {
             system_name = QStringLiteral("Galileo");
+        }
+        else if (ch->system() == "C")
+        {
+            system_name = QStringLiteral("BeiDou");
+        }
+        else if (ch->system() == "R")
+        {
+            system_name = QStringLiteral("Glonass");
+        }
+        else if (ch->system() == "J")
+        {
+            system_name = QStringLiteral("QZSS");
+        }
+        else if (ch->system() == "I")
+        {
+            system_name = QStringLiteral("IRNSS");
+        }
+        else if (ch->system() == "S")
+        {
+            system_name = QStringLiteral("SBAS");
         }
 
         if (m_mapSignalPrettyName.find(ch->signal()) != m_mapSignalPrettyName.end())

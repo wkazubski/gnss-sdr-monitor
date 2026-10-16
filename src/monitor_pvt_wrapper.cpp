@@ -53,16 +53,21 @@ MonitorPvtWrapper::MonitorPvtWrapper(QObject *parent) : QObject(parent)
  */
 void MonitorPvtWrapper::addMonitorPvt(const gnss_sdr::MonitorPvt &monitor_pvt)
 {
+    if(m_bufferMonitorPvt.back().tow_at_current_symbol_ms() == monitor_pvt.tow_at_current_symbol_ms())
+        return;
     m_bufferMonitorPvt.push_back(monitor_pvt);
 
     Coordinates coord;
     coord.latitude = monitor_pvt.latitude();
     coord.longitude = monitor_pvt.longitude();
     m_path.push_back(coord);
+    double TOW_s = monitor_pvt.tow_at_current_symbol_ms() * 0.001;
 
     emit dataChanged();
-    emit altitudeChanged(monitor_pvt.tow_at_current_symbol_ms(), monitor_pvt.height());
-    emit dopChanged(monitor_pvt.tow_at_current_symbol_ms(), monitor_pvt.gdop(), monitor_pvt.pdop(), monitor_pvt.hdop(), monitor_pvt.vdop());
+    emit altitudeChanged(TOW_s, monitor_pvt.height());
+    emit ppmChanged(TOW_s, monitor_pvt.user_clk_drift_ppm());
+    emit dopChanged(TOW_s, monitor_pvt.gdop(), monitor_pvt.pdop(), monitor_pvt.hdop(), monitor_pvt.vdop());
+    emit ecefChanged(monitor_pvt.pos_x(), monitor_pvt.pos_y(), monitor_pvt.pos_z());
 }
 
 /*!

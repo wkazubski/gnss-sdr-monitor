@@ -4,7 +4,11 @@
         <file>images/icon.svg</file>
         <file>images/flag-cn.png</file>
         <file>images/flag-eu.png</file>
+        <file>images/flag-in.png</file>
+        <file>images/flag-jp.png</file>
         <file>images/flag-ru.png</file>
         <file>images/flag-us.png</file>
+        <file>images/scale.png</file>
+        <file>images/scale_end.png</file>
     </qresource>
 </RCC>
