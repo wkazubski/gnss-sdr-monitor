@@ -49,19 +49,22 @@ public:
     void update();
 
     void populateChannels(const gnss_sdr::Observables *m_stocks);
-    void populateChannel(const gnss_sdr::GnssSynchro *ch);
     void clearChannel(int ch_id);
     void clearChannels();
     QString getSignalPrettyName(const gnss_sdr::GnssSynchro *ch);
     QList<QVariant> getListFromCbuf(boost::circular_buffer<double> cbuf);
     int getColumns();
     void setBufferSize();
-    int getChannelId(int row);
-    double cn0(int prn, const std::string & signal);
-    void setUsed(int prn, const std::string & signal, bool used);
+    int getChannelId(int row) const;
+    QModelIndex channel_index(int channel, int column) const;
+    double cn0(uint32_t prn, const std::string & signal, const char system);
+    int channel(uint32_t prn, const std::string & signal, const char system);
+    void setUsed(uint32_t prn, const std::string & signal, bool used);
     void clearUsed();
     quint16 getActive() const { return m_active.size();}
     quint16 getGood() const { return m_good.size();}
+    uint32_t getPrn(int channelId) const;
+    char getSystem(int channelId) const;
 
     // List of virtual functions that must be implemented in a read-only table model.
     int rowCount(const QModelIndex &parent) const;
@@ -71,6 +74,7 @@ public:
 
 public slots:
     gnss_sdr::GnssSynchro getChannelData(int key);
+    void selectSat(uint32_t prn, char system);
 
 protected:
     int m_columns;
@@ -85,16 +89,18 @@ protected:
     std::map<int, boost::circular_buffer<double>> m_channelsPromptQ;
     std::map<int, boost::circular_buffer<double>> m_channelsCn0;
     std::map<int, boost::circular_buffer<double>> m_channelsDoppler;
-    std::pair<std::array<char,2>,char> toKey(const std::string& sig, uint8_t prn)
-    {
-        return {std::array<char,2>({sig[0],sig[1]}),prn};
-    }
-    std::map<std::pair<std::array<char,2>,uint8_t>, int> m_sigChannel;
+    std::map<uint32_t, std::map<std::array<char,2>,int>> m_sigChannel;
+    std::map<char, std::set<std::array<char,2>>> m_system_signal;
     std::set<int> m_used;
     std::set<int> m_active;
+    std::set<int> m_new_active;
     std::set<int> m_good;
+    std::set<int> m_new_good;
+    std::pair<char,uint32_t> m_sel_item{};
+    bool m_changed{};
 
 private:
+    void populateChannel(const gnss_sdr::GnssSynchro *ch);
     std::map<std::string, QString> m_mapSignalPrettyName;
 };
 

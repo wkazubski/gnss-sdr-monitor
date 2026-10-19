@@ -71,8 +71,11 @@ ChannelTableModel::ChannelTableModel()
  */
 void ChannelTableModel::update()
 {
-    beginResetModel();
-    endResetModel();
+    if(m_changed)
+    {
+        emit dataChanged(createIndex(0,0),createIndex(11,m_channels.size()-1));
+        m_changed=false;
+    }
 }
 
 int ChannelTableModel::rowCount(const QModelIndex &parent) const
@@ -243,6 +246,21 @@ QVariant ChannelTableModel::data(const QModelIndex &index, int role) const
     else if (role == Qt::TextAlignmentRole)
     {
         return Qt::AlignCenter;
+    }else if (role == Qt::BackgroundRole)
+    {
+            int channel_id = m_channelsId.at(index.row());
+
+            const gnss_sdr::GnssSynchro & channel = m_channels.at(channel_id);
+            const bool isUsed=m_used.find(channel_id) != m_used.end();
+            const bool isSelected = channel.prn() == m_sel_item.second && channel.system()[0] == m_sel_item.first;
+            if(!isUsed && !isSelected)
+                return QVariant::Invalid;
+            if(isUsed && isSelected)
+                return QBrush(QColor(200, 255, 255, 255));
+            if(isUsed)
+                return QBrush(QColor(230, 255, 230, 255));
+            if(isSelected)
+                return QBrush(QColor(200, 200, 255, 255));
     }
     return QVariant::Invalid;
 }
@@ -304,20 +322,30 @@ QVariant ChannelTableModel::headerData(int section,
  */
 void ChannelTableModel::populateChannels(const gnss_sdr::Observables *stocks)
 {
-    std::set<int> new_active{};
-    std::set<int> new_good{};
+    int oldN = m_channels.size();
     for (std::size_t i = 0; i < stocks->observable_size(); i++)
     {
         populateChannel(&stocks->observable(i));
         if(stocks->observable(i).fs()!=0)
         {
-            new_active.emplace(i);
+            m_new_active.emplace(stocks->observable(i).channel_id());
             if(stocks->observable(i).flag_valid_word())
-                new_good.emplace(i);
+                m_new_good.emplace(stocks->observable(i).channel_id());
         }
     }
-    m_active = new_active;
-    m_good = new_good;
+    if(m_channels.size() > oldN)
+    {
+        beginInsertRows(QModelIndex(),oldN,m_channels.size()-1);
+        endInsertRows();
+    }
+    if(!m_changed)
+    {
+        m_active = std::move(m_new_active);
+        m_good = std::move(m_new_good);
+        //m_new_active.clear();
+        //m_new_good.clear();
+    }
+    m_changed = true;
 }
 
 /*!
@@ -410,15 +438,49 @@ void ChannelTableModel::populateChannel(const gnss_sdr::GnssSynchro *ch)
             // Map size has changed so record the new channel number in the vector of channel IDs.
             m_channelsId.push_back(ch->channel_id());
         }
-        m_sigChannel[toKey(ch->signal(),ch->prn())]=ch->channel_id();
+        std::array<char,2> sig({ch->signal()[0],ch->signal()[1]});
+        m_system_signal[ch->system()[0]].emplace(sig);
+        m_sigChannel[ch->prn()][sig]=ch->channel_id();
     }
 }
-double ChannelTableModel::cn0(int prn, const std::string & signal)
+
+double ChannelTableModel::cn0(uint32_t prn, const std::string & signal, const char system)
 {
-    auto it = m_sigChannel.find(toKey(signal,prn));
-    if(it == m_sigChannel.end())
+    int ch = channel(prn,signal,system);
+    if(ch<0)
         return 0;
-    return m_channelsCn0[it->second].at(m_channelsCn0[it->second].size() - 1);
+    return m_channelsCn0[ch].at(m_channelsCn0[ch].size() - 1);
+}
+
+int ChannelTableModel::channel(uint32_t prn, const std::string & signal, const char system)
+{
+    auto it = m_sigChannel.find(prn);
+    if(it == m_sigChannel.end())
+        return -1;
+    std::array<char,2> sig({signal[0],signal[1]});
+    auto it1 = it->second.find(sig);
+    if(it1 == it->second.end())
+    {
+        auto sys_sig = m_system_signal.find(system);
+        if(sys_sig == m_system_signal.end())
+            return -1;
+        for(auto sigs:sys_sig->second)
+        {
+            it1 = it->second.find(sigs);
+            if(it1 != it->second.end())
+                break;
+        }
+        if(it1 == it->second.end())
+            return -1;
+    }
+    if(m_channels[it1->second].prn()!=prn)
+    {
+        it->second.erase(sig);
+        return -1;
+    }
+    if(m_active.find(it1->second) == m_active.end())
+        return -1;
+    return it1->second;
 }
 
 void ChannelTableModel::clearUsed()
@@ -426,15 +488,15 @@ void ChannelTableModel::clearUsed()
     m_used.clear();
 }
 
-void ChannelTableModel::setUsed(int prn, const std::string & signal, bool used)
+void ChannelTableModel::setUsed(uint32_t prn, const std::string & signal, bool used)
 {
-    auto it = m_sigChannel.find(toKey(signal,prn));
-    if(it == m_sigChannel.end())
+    int ch = channel(prn, signal,' ');
+    if(ch < 0)
         return;
     if(used)
-        m_used.emplace(it->second);
+        m_used.emplace(ch);
     else
-        m_used.erase(it->second);
+        m_used.erase(ch);
 }
 
 /*!
@@ -458,6 +520,7 @@ void ChannelTableModel::clearChannel(int ch_id)
  */
 void ChannelTableModel::clearChannels()
 {
+    beginResetModel();
     m_channelsId.clear();
     m_channels.clear();
     m_channelsSignal.clear();
@@ -470,7 +533,7 @@ void ChannelTableModel::clearChannels()
     m_active.clear();
     m_used.clear();
     m_good.clear();
-    m_sigChannel.clear();
+    endResetModel();
 }
 
 /*!
@@ -560,7 +623,40 @@ void ChannelTableModel::setBufferSize()
 /*!
  Gets the id number of the channel occupying the queried \a row of the table model.
  */
-int ChannelTableModel::getChannelId(int row)
+int ChannelTableModel::getChannelId(int row) const
 {
     return m_channelsId.at(row);
+}
+
+QModelIndex ChannelTableModel::channel_index(int channel, int column) const
+{
+    int row = 0;
+    for(row=0;row<m_channelsId.size();row++)
+        if(m_channelsId[row]==channel)
+            break;
+    if(row == m_channelsId.size())
+        return QModelIndex();
+    return index(row, column);
+}
+
+void ChannelTableModel::selectSat(uint32_t prn, char system)
+{
+    m_sel_item = std::pair<char,uint32_t>(system,prn);
+    emit dataChanged(createIndex(0,0),createIndex(11,m_channels.size()-1));
+}
+
+uint32_t ChannelTableModel::getPrn(int channelId) const
+{
+    auto it = m_channels.find(channelId);
+    if(it == m_channels.end())
+        return 0;
+    return it->second.prn();
+}
+
+char ChannelTableModel::getSystem(int channelId) const
+{
+    auto it = m_channels.find(channelId);
+    if(it == m_channels.end())
+        return ' ';
+    return it->second.system()[0];
 }

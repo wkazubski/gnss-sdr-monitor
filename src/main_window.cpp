@@ -106,6 +106,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_SkyViewDockWidget->setWidget(m_SkyViewWidget);
     addDockWidget(Qt::TopDockWidgetArea, m_SkyViewDockWidget);
     connect(&m_updateTimer, &QTimer::timeout, m_SkyViewWidget, &SkyViewWidget::redraw);
+    connect(m_SkyViewWidget,&SkyViewWidget::satSelected,m_SkyViewWidget,&SkyViewWidget::selectSat);
 
     // QMenuBar.
     ui->actionQuit->setIcon(QIcon::fromTheme("application-exit"));
@@ -163,8 +164,10 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_socketMonitorPvt, &QUdpSocket::readyRead, this, &MainWindow::receiveMonitorPvt);
     connect(qApp, &QApplication::aboutToQuit, this, &MainWindow::quit);
     connect(ui->tableView, &QTableView::clicked, this, &MainWindow::expandPlot);
+    connect(ui->tableView, &QTableView::activated, this, &MainWindow::expandPlot);
     connect(ui->actionAbout, &QAction::triggered, this, &MainWindow::about);
     connect(ui->actionAboutQt, &QAction::triggered, qApp, &QApplication::aboutQt);
+    connect(m_SkyViewWidget,&SkyViewWidget::satSelected,m_model,&ChannelTableModel::selectSat);
 
     // Load settings from last session.
     loadSettings();
@@ -179,9 +182,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
     QMainWindow::closeEvent(event);
 }
 
-void MainWindow::updateChart(QtCharts::QChart *chart, QtCharts::QXYSeries *series, const QModelIndex &index)
+void MainWindow::updateChart(QtCharts::QChart *chart, QtCharts::QXYSeries *series, const int channel, const int column)
 {
-    const QVector<QPointF> &points = index.data(Qt::DisplayRole).value<QVector<QPointF>>();
+    const QVector<QPointF> &points = m_model->channel_index(channel, column).data(Qt::DisplayRole).value<QVector<QPointF>>();
+
+    chart->setTitle(m_model->headerData(column,Qt::Horizontal,Qt::DisplayRole).value<QString>() + " CH " + QString::number(channel) + 
+        " (" + m_model->channel_index(channel, 1).data(Qt::DisplayRole).value<QString>() +
+        " PRN" + m_model->channel_index(channel, 2).data(Qt::DisplayRole).value<QString>() +")");
 
     double min_x = std::numeric_limits<int>::max();
     double max_x = -std::numeric_limits<int>::max();
@@ -256,14 +263,17 @@ void MainWindow::receiveMonitorPvt()
         if (m_stop->isEnabled())
         {
             m_monitorPvtWrapper->addMonitorPvt(m_monitorPvt);
-            m_SkyViewWidget->clear();
+            m_SkyViewWidget->startUpdate();
             m_model->clearUsed();
+            m_usedSat = 0;
             for(int k=0;k<m_monitorPvt.used_satellites_size();k++)
             {
                 auto & s = m_monitorPvt.used_satellites(k);
-                m_model->setUsed(s.prn(), s.signal(), true);
-                m_SkyViewWidget->addData(s.prn(),s.azimuth_deg(),s.elevation_deg(),s.system(),s.signal(),s.combined(),m_model->cn0(s.prn(),s.signal()),0);
+                m_model->setUsed(s.prn(), s.signal(), s.used());
+                m_SkyViewWidget->addData(s.prn(),s.azimuth_deg(),s.elevation_deg(),s.system(),s.signal(),s.combined(),m_model->cn0(s.prn(),s.signal(), s.system()[0]), m_model->channel(s.prn(),s.signal(),s.system()[0]), s.used(), s.healthy());
+                m_usedSat += s.used()?1:0;
             }
+            m_SkyViewWidget->finishUpdate();
             // clear->setEnabled(true);
         }
     }
@@ -278,6 +288,7 @@ void MainWindow::clearEntries()
     m_ppmWidget->clear();
     m_DOPWidget->clear();
     m_SkyViewWidget->clear();
+    m_usedSat = 0;
 
     m_clear->setEnabled(false);
 }
@@ -392,15 +403,22 @@ void MainWindow::setPreferences()
 
 void MainWindow::expandPlot(const QModelIndex &index)
 {
-    qDebug() << index;
+    // qDebug() << index;
 
     int channel_id = m_model->getChannelId(index.row());
 
     QChartView *chartView = nullptr;
 
-    if (index.column() == 5)  // Constellation
+    if (index.column() < 5)
     {
-        if (m_plotsConstellation.find(index.row()) == m_plotsConstellation.end())
+        char sys = m_model->getSystem(channel_id);
+        uint32_t prn = m_model->getPrn(channel_id);
+        m_model->selectSat(prn,sys);
+        m_SkyViewWidget->selectSat(prn,sys);
+    }
+    else if (index.column() == 5)  // Constellation
+    {
+       if (m_plotsConstellation.find(channel_id) == m_plotsConstellation.end())
         {
             QChart *chart = new QChart();  // has no parent!
             chart->setTitle("Constellation CH " + QString::number(channel_id));
@@ -418,32 +436,30 @@ void MainWindow::expandPlot(const QModelIndex &index)
             chartView = new QChartView(chart);
             chartView->setRenderHint(QPainter::Antialiasing);
             chartView->setContentsMargins(0, 0, 0, 0);
+            chartView->setAttribute(Qt::WA_DeleteOnClose, true);
 
             // Draw chart now.
-            updateChart(chart, series, index);
-
-            // Delete the chartView object when MainWindow is closed.
-            connect(this, &QMainWindow::destroyed, chartView, &QObject::deleteLater);
+            updateChart(chart, series, channel_id, index.column());
 
             // Remove element from map when chartView widget is closed.
             connect(chartView, &QObject::destroyed,
-                [this, index]() { m_plotsConstellation.erase(index.row()); });
+                [this, channel_id, chartView]() { m_plotsConstellation.erase(channel_id); chartView->deleteLater(); });
 
             // Update chart on timer timeout.
-            connect(&m_updateTimer, &QTimer::timeout, chart, [this, chart, series, index]() {
-                updateChart(chart, series, index);
+            connect(&m_updateTimer, &QTimer::timeout, chart, [this, chart, series, channel_id]() {
+                updateChart(chart, series, channel_id, 5);
             });
 
-            m_plotsConstellation[index.row()] = chartView;
+            m_plotsConstellation[channel_id] = chartView;
         }
         else
         {
-            chartView = m_plotsConstellation.at(index.row());
+            chartView = m_plotsConstellation.at(channel_id);
         }
     }
     else if (index.column() == 6)  // CN0
     {
-        if (m_plotsCn0.find(index.row()) == m_plotsCn0.end())
+        if (m_plotsCn0.find(channel_id) == m_plotsCn0.end())
         {
             QChart *chart = new QChart();  // has no parent!
             chart->setTitle("CN0 CH " + QString::number(channel_id));
@@ -460,32 +476,30 @@ void MainWindow::expandPlot(const QModelIndex &index)
             chartView = new QChartView(chart);
             chartView->setRenderHint(QPainter::Antialiasing);
             chartView->setContentsMargins(0, 0, 0, 0);
+            chartView->setAttribute(Qt::WA_DeleteOnClose, true);
 
             // Draw chart now.
-            updateChart(chart, series, index);
-
-            // Delete the chartView object when MainWindow is closed.
-            connect(this, &QMainWindow::destroyed, chartView, &QObject::deleteLater);
+            updateChart(chart, series, channel_id, index.column());
 
             // Remove element from map when chartView widget is closed.
             connect(chartView, &QObject::destroyed,
-                [this, index]() { m_plotsCn0.erase(index.row()); });
+                [this, channel_id, chartView]() { m_plotsCn0.erase(channel_id); chartView->deleteLater(); });
 
             // Update chart on timer timeout.
-            connect(&m_updateTimer, &QTimer::timeout, chart, [this, chart, series, index]() {
-                updateChart(chart, series, index);
+            connect(&m_updateTimer, &QTimer::timeout, chart, [this, chart, series, channel_id]() {
+                updateChart(chart, series, channel_id, 6);
             });
 
-            m_plotsCn0[index.row()] = chartView;
+            m_plotsCn0[channel_id] = chartView;
         }
         else
         {
-            chartView = m_plotsCn0.at(index.row());
+            chartView = m_plotsCn0.at(channel_id);
         }
     }
     else if (index.column() == 7)  // Doppler
     {
-        if (m_plotsDoppler.find(index.row()) == m_plotsDoppler.end())
+        if (m_plotsDoppler.find(channel_id) == m_plotsDoppler.end())
         {
             QChart *chart = new QChart();  // has no parent!
             chart->setTitle("Doppler CH " + QString::number(channel_id));
@@ -504,25 +518,22 @@ void MainWindow::expandPlot(const QModelIndex &index)
             chartView->setContentsMargins(0, 0, 0, 0);
 
             // Draw chart now.
-            updateChart(chart, series, index);
-
-            // Delete the chartView object when MainWindow is closed.
-            connect(this, &QMainWindow::destroyed, chartView, &QObject::deleteLater);
+            updateChart(chart, series, channel_id, index.column());
 
             // Remove element from map when chartView widget is closed.
             connect(chartView, &QObject::destroyed,
-                [this, index]() { m_plotsDoppler.erase(index.row()); });
+                [this, channel_id, chartView]() { m_plotsDoppler.erase(channel_id);  chartView->deleteLater(); });
 
             // Update chart on timer timeout.
-            connect(&m_updateTimer, &QTimer::timeout, chart, [this, chart, series, index]() {
-                updateChart(chart, series, index);
+            connect(&m_updateTimer, &QTimer::timeout, chart, [this, chart, series, channel_id]() {
+                updateChart(chart, series, channel_id, 7);
             });
 
-            m_plotsDoppler[index.row()] = chartView;
+            m_plotsDoppler[channel_id] = chartView;
         }
         else
         {
-            chartView = m_plotsDoppler.at(index.row());
+            chartView = m_plotsDoppler.at(channel_id);
         }
     }
 
@@ -591,7 +602,7 @@ void cmpUpdateFlag(quint16& a, const quint16 b, bool& f)
 
 void MainWindow::updateTitle()
 {
-    const auto satUsed=m_monitorPvt.used_satellites_size();
+    const auto satUsed=m_usedSat;
     const auto satTracking=m_model->getActive();
     const auto satGood=m_model->getGood();
     bool doUpdate{false};

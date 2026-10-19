@@ -36,6 +36,7 @@
 
 #include <QtGui>
 #include <QFrame>
+#include <map>
 
 class SkyViewWidget : public QFrame
 {
@@ -46,19 +47,25 @@ public:
     QSize minimumSizeHint() const;
     QSize sizeHint() const;
 
+signals:
+    void satSelected(uint32_t prn, char system);
 public slots:
-    void addData(int prn, qreal az, qreal el, std::string System, std::string Signal, bool combined, qreal snr, int channel);
+    void addData(uint32_t prn, qreal az, qreal el, std::string System, std::string Signal, bool combined, qreal snr, int channel, bool used, bool healthy);
     void redraw();
     void clear();
+    void startUpdate();
+    void finishUpdate();
+    void selectSat(uint32_t prn, char system);
 
 protected:
     void paintEvent(QPaintEvent *event);
     void mouseMoveEvent(QMouseEvent * event) override;
+    void mousePressEvent(QMouseEvent* event) override;
 
 private:
     struct int_data
     {
-        int prn;
+        uint32_t prn;
         qreal az;
         qreal el;
         std::string System;
@@ -66,6 +73,9 @@ private:
         bool combined;
         qreal snr;
         int channel;
+        bool used;
+        bool healthy;
+        bool isRefreshed;
         qreal x;
         qreal y;
     };
@@ -77,7 +87,9 @@ private:
     }
     void showToolTip(QMouseEvent* event, QString toolTipText);
 
-    QList<int_data> m_items{};
+    std::map<std::pair<std::string,uint32_t>,int_data> m_items{};
+    std::pair<std::string,uint32_t> m_top_item{};
+    std::pair<char,uint32_t> m_sel_item{};
     QFont   m_font;
     qreal   m_fontSize{0};
     qreal   m_topMargin{0};

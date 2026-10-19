@@ -93,7 +93,7 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
-    void updateChart(QtCharts::QChart *chart, QtCharts::QXYSeries *series, const QModelIndex &index);
+    void updateChart(QtCharts::QChart *chart, QtCharts::QXYSeries *series, const int channel, const int column);
 
     Ui::MainWindow *ui;
 
@@ -123,6 +123,7 @@ private:
     quint16 m_satUsed{0};
     quint16 m_satTracking{0};
     quint16 m_satGood{0};
+    quint16 m_usedSat{0};
 
     QSettings m_settings;
     QTimer m_updateTimer;
